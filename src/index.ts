@@ -30,10 +30,7 @@ async function doRefresh(ctx: ExtensionContext): Promise<void> {
     return;
   }
   try {
-    const apiKey: string | undefined =
-      await ctx.modelRegistry.getApiKeyForProvider("github-copilot");
-    if (!apiKey) return;
-    const data: CopilotUsageData = await fetchCopilotUsage(apiKey);
+    const data: CopilotUsageData = await fetchCopilotUsage(ctx.modelRegistry.authStorage);
     cache.set(data);
     publishStatus(ctx, data);
   } catch (error: unknown) {

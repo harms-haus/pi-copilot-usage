@@ -1,5 +1,6 @@
 // GitHub Copilot API interaction, response types, and provider detection
 
+import type { AuthStorage } from "@earendil-works/pi-coding-agent";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -58,21 +59,21 @@ export function isCopilotProvider(provider: string | undefined): boolean {
   return provider === "github-copilot";
 }
 
-async function fetchWithToken(token: string): Promise<Response> {
+async function fetchWithAuth(authHeader: string): Promise<Response> {
   return fetch(COPILOT_USER_URL, {
     headers: {
-      Authorization: `Bearer ${token}`,
+      Authorization: authHeader,
       ...COPILOT_HEADERS,
     },
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
 }
 
-async function exchangeToken(githubToken: string): Promise<string | undefined> {
+async function exchangeToken(accessToken: string): Promise<string | undefined> {
   try {
     const response: Response = await fetch(COPILOT_TOKEN_URL, {
       headers: {
-        Authorization: `Bearer ${githubToken}`,
+        Authorization: `Bearer ${accessToken}`,
         ...COPILOT_HEADERS,
       },
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
@@ -119,36 +120,50 @@ function parseCopilotResponse(json: CopilotUserResponse): CopilotUsageData {
   return { percentage, resetTimeMs };
 }
 
-export async function fetchCopilotUsage(apiKey: string): Promise<CopilotUsageData> {
-  // Tier 1: Direct Bearer token attempt
-  let response: Response = await fetchWithToken(apiKey);
+/** Try a single Authorization header value; return parsed data on success or undefined. */
+async function tryAuthHeader(authHeader: string): Promise<CopilotUsageData | undefined> {
+  const response: Response = await fetchWithAuth(authHeader);
   if (response.ok) {
     const json: CopilotUserResponse = (await response.json()) as CopilotUserResponse;
     return parseCopilotResponse(json);
   }
   await response.body?.cancel();
+  return undefined;
+}
 
-  // Tier 2: Token exchange
-  const exchangedToken: string | undefined = await exchangeToken(apiKey);
-  if (exchangedToken) {
-    response = await fetchWithToken(exchangedToken);
-    if (response.ok) {
-      const json: CopilotUserResponse = (await response.json()) as CopilotUserResponse;
-      return parseCopilotResponse(json);
+export async function fetchCopilotUsage(authStorage: AuthStorage): Promise<CopilotUsageData> {
+  // Step 1: Try GitHub OAuth token from authStorage
+  const credential = authStorage.get("github-copilot");
+  if (credential && credential.type === "oauth") {
+    const oauthCredential = credential as { type: "oauth"; refresh: string };
+    if (oauthCredential.refresh) {
+      const bearer = await tryAuthHeader(`Bearer ${oauthCredential.refresh}`);
+      if (bearer) return bearer;
+
+      const token = await tryAuthHeader(`token ${oauthCredential.refresh}`);
+      if (token) return token;
     }
-    await response.body?.cancel();
   }
 
-  // Tier 3: gh CLI fallback
+  // Step 2: Try proxy token from authStorage with token exchange
+  const accessToken: string | undefined = await authStorage.getApiKey("github-copilot");
+  if (accessToken) {
+    const exchangedToken: string | undefined = await exchangeToken(accessToken);
+    if (exchangedToken) {
+      const exchanged = await tryAuthHeader(`Bearer ${exchangedToken}`);
+      if (exchanged) return exchanged;
+    }
+
+    const direct = await tryAuthHeader(`token ${accessToken}`);
+    if (direct) return direct;
+  }
+
+  // Step 3: gh CLI fallback
   const ghToken: string | undefined = await getGhCliToken();
-  if (ghToken != null && ghToken !== apiKey) {
-    response = await fetchWithToken(ghToken);
-    if (response.ok) {
-      const json: CopilotUserResponse = (await response.json()) as CopilotUserResponse;
-      return parseCopilotResponse(json);
-    }
-    await response.body?.cancel();
+  if (ghToken) {
+    const ghResult = await tryAuthHeader(`token ${ghToken}`);
+    if (ghResult) return ghResult;
   }
 
-  throw new Error(`GitHub Copilot API request failed with status ${response.status}`);
+  throw new Error(`GitHub Copilot API request failed — all auth strategies exhausted`);
 }

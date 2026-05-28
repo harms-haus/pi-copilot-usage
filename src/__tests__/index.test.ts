@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const mockSetStatus = vi.fn();
-const mockGetApiKey = vi.fn();
+const mockAuthStorageGet = vi.fn();
+const mockAuthStorageGetApiKey = vi.fn();
 const mockFetchCopilotUsage = vi.fn();
 const mockCacheGet = vi.fn();
 const mockCacheSet = vi.fn();
@@ -32,11 +33,16 @@ vi.mock("../usage-cache.js", () => ({
 
 vi.mock("@earendil-works/pi-coding-agent", () => ({}));
 
+const mockAuthStorage = {
+  get: mockAuthStorageGet,
+  getApiKey: mockAuthStorageGetApiKey,
+};
+
 const mockCtx = {
   hasUI: true,
   ui: { setStatus: mockSetStatus },
   model: { provider: "github-copilot", id: "gpt-4.1" },
-  modelRegistry: { getApiKeyForProvider: mockGetApiKey },
+  modelRegistry: { authStorage: mockAuthStorage },
 };
 
 const sampleUsageData = { percentage: 42.5, resetTimeMs: 1700000000000 };
@@ -59,7 +65,12 @@ describe("extension entry point", () => {
     vi.resetModules();
     vi.clearAllMocks();
     mockCacheGet.mockReturnValue(null);
-    mockGetApiKey.mockResolvedValue("test-key");
+    mockAuthStorageGet.mockReturnValue({
+      type: "oauth",
+      refresh: "oauth-token",
+      access: "proxy-token",
+    });
+    mockAuthStorageGetApiKey.mockResolvedValue("proxy-token");
     mockFetchCopilotUsage.mockResolvedValue(sampleUsageData);
     mockIsInBackoff.mockReturnValue(false);
   });
@@ -67,12 +78,12 @@ describe("extension entry point", () => {
   // ── session_start ──────────────────────────────────────────────────
 
   describe("session_start handler", () => {
-    it("fetches usage, caches, and publishes status when copilot model + hasUI + API key", async () => {
+    it("fetches usage, caches, and publishes status when copilot model + hasUI + auth", async () => {
       const handlers = await getHandlers();
 
       await handlers["session_start"]!(undefined, mockCtx);
 
-      expect(mockFetchCopilotUsage).toHaveBeenCalledWith("test-key");
+      expect(mockFetchCopilotUsage).toHaveBeenCalledWith(mockAuthStorage);
       expect(mockCacheSet).toHaveBeenCalledWith(sampleUsageData);
       expect(mockSetStatus).toHaveBeenCalledWith("zai-usage", expect.any(String));
 
@@ -83,14 +94,17 @@ describe("extension entry point", () => {
       });
     });
 
-    it("silently skips when copilot model + hasUI but no API key", async () => {
+    it("logs error when fetchCopilotUsage throws (no auth available)", async () => {
       const handlers = await getHandlers();
-      mockGetApiKey.mockResolvedValue(undefined);
+      mockFetchCopilotUsage.mockRejectedValue(new Error("all auth strategies exhausted"));
+      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
       await handlers["session_start"]!(undefined, mockCtx);
 
-      expect(mockFetchCopilotUsage).not.toHaveBeenCalled();
+      expect(consoleSpy).toHaveBeenCalledWith("[pi-copilot-usage]", expect.any(Error));
       expect(mockSetStatus).not.toHaveBeenCalled();
+
+      consoleSpy.mockRestore();
     });
 
     it("clears status when non-copilot model", async () => {
@@ -135,7 +149,7 @@ describe("extension entry point", () => {
       await handlers["model_select"]!(undefined, mockCtx);
 
       expect(mockCacheClear).toHaveBeenCalled();
-      expect(mockFetchCopilotUsage).toHaveBeenCalledWith("test-key");
+      expect(mockFetchCopilotUsage).toHaveBeenCalledWith(mockAuthStorage);
       expect(mockCacheSet).toHaveBeenCalledWith(sampleUsageData);
       expect(mockSetStatus).toHaveBeenCalledWith("zai-usage", expect.any(String));
     });
@@ -177,7 +191,7 @@ describe("extension entry point", () => {
 
       await handlers["turn_end"]!(undefined, mockCtx);
 
-      expect(mockFetchCopilotUsage).toHaveBeenCalledWith("test-key");
+      expect(mockFetchCopilotUsage).toHaveBeenCalledWith(mockAuthStorage);
       expect(mockCacheSet).toHaveBeenCalledWith(sampleUsageData);
     });
 

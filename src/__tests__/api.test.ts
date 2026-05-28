@@ -9,6 +9,9 @@ vi.mock("node:child_process", () => ({
 
 import { execFile } from "node:child_process";
 
+// Mock @earendil-works/pi-coding-agent so the import in api.ts resolves
+vi.mock("@earendil-works/pi-coding-agent", () => ({}));
+
 const COPILOT_USER_URL = "https://api.github.com/copilot_internal/user";
 const COPILOT_TOKEN_URL = "https://api.github.com/copilot_internal/v2/token";
 
@@ -39,6 +42,19 @@ function createMockUserResponse(overrides: {
       ? { quota_reset_date: overrides.quota_reset_date }
       : {}),
   };
+}
+
+function createMockAuthStorage(options: { oauthRefresh?: string; accessToken?: string }) {
+  return {
+    get: vi
+      .fn()
+      .mockReturnValue(
+        options.oauthRefresh
+          ? { type: "oauth", refresh: options.oauthRefresh, access: "proxy-token" }
+          : undefined,
+      ),
+    getApiKey: vi.fn().mockResolvedValue(options.accessToken),
+  } as any;
 }
 
 describe("isCopilotProvider", () => {
@@ -93,7 +109,8 @@ describe("fetchCopilotUsage", () => {
         ),
       );
 
-      const result: CopilotUsageData = await fetchCopilotUsage("test-key");
+      const authStorage = createMockAuthStorage({ oauthRefresh: "oauth-token" });
+      const result: CopilotUsageData = await fetchCopilotUsage(authStorage);
 
       expect(result.percentage).toBe(20.0);
       expect(result.resetTimeMs).toBe(new Date("2025-07-01T00:00:00Z").getTime());
@@ -108,7 +125,8 @@ describe("fetchCopilotUsage", () => {
         ),
       );
 
-      const result: CopilotUsageData = await fetchCopilotUsage("test-key");
+      const authStorage = createMockAuthStorage({ oauthRefresh: "oauth-token" });
+      const result: CopilotUsageData = await fetchCopilotUsage(authStorage);
       expect(result.percentage).toBe(45.7);
     });
 
@@ -121,7 +139,8 @@ describe("fetchCopilotUsage", () => {
         ),
       );
 
-      const result: CopilotUsageData = await fetchCopilotUsage("test-key");
+      const authStorage = createMockAuthStorage({ oauthRefresh: "oauth-token" });
+      const result: CopilotUsageData = await fetchCopilotUsage(authStorage);
       expect(result.percentage).toBe(0);
     });
 
@@ -134,7 +153,8 @@ describe("fetchCopilotUsage", () => {
         ),
       );
 
-      const result: CopilotUsageData = await fetchCopilotUsage("test-key");
+      const authStorage = createMockAuthStorage({ oauthRefresh: "oauth-token" });
+      const result: CopilotUsageData = await fetchCopilotUsage(authStorage);
       expect(result.percentage).toBe(100);
     });
 
@@ -147,7 +167,8 @@ describe("fetchCopilotUsage", () => {
         ),
       );
 
-      const result: CopilotUsageData = await fetchCopilotUsage("test-key");
+      const authStorage = createMockAuthStorage({ oauthRefresh: "oauth-token" });
+      const result: CopilotUsageData = await fetchCopilotUsage(authStorage);
       expect(result.percentage).toBe(50.0);
       expect(result.resetTimeMs).toBeUndefined();
     });
@@ -163,7 +184,8 @@ describe("fetchCopilotUsage", () => {
         }),
       );
 
-      await expect(fetchCopilotUsage("test-key")).rejects.toThrow(
+      const authStorage = createMockAuthStorage({ oauthRefresh: "oauth-token" });
+      await expect(fetchCopilotUsage(authStorage)).rejects.toThrow(
         "No premium_interactions quota found in GitHub Copilot usage response",
       );
     });
@@ -175,19 +197,16 @@ describe("fetchCopilotUsage", () => {
         }),
       );
 
-      await expect(fetchCopilotUsage("test-key")).rejects.toThrow(
+      const authStorage = createMockAuthStorage({ oauthRefresh: "oauth-token" });
+      await expect(fetchCopilotUsage(authStorage)).rejects.toThrow(
         "No premium_interactions quota found in GitHub Copilot usage response",
       );
     });
 
-    it("throws with status when all auth tiers fail (non-OK status)", async () => {
+    it("throws when all auth strategies fail", async () => {
       const fetchSpy = vi.spyOn(globalThis, "fetch");
 
-      // All fetch calls return non-OK
-      fetchSpy.mockResolvedValue(mockFetchResponse({}, false, 403));
-
-      // Mock token exchange to return a token so tier 2 is exercised but also fails
-      // We need the token URL to return a valid exchange, and user URL to fail
+      // All user URL calls return non-OK, token exchange returns a token but user URL still fails
       fetchSpy.mockImplementation((url: string | URL | Request) => {
         const urlStr =
           typeof url === "string" ? url : url instanceof URL ? url.toString() : url.url;
@@ -199,20 +218,24 @@ describe("fetchCopilotUsage", () => {
         return Promise.resolve(mockFetchResponse({}, false, 403));
       });
 
-      // Mock gh CLI to return nothing useful (returns same key so it's skipped)
+      // Mock gh CLI to return nothing useful
       vi.mocked(execFile).mockImplementation((_cmd: any, _args: any, _opts: any, cb: any) => {
-        cb(null, { stdout: "test-key", stderr: "" });
+        cb(null, { stdout: "gh-token\n", stderr: "" });
         return {} as any;
       });
 
-      await expect(fetchCopilotUsage("test-key")).rejects.toThrow(
-        "GitHub Copilot API request failed with status 403",
+      const authStorage = createMockAuthStorage({
+        oauthRefresh: "oauth-token",
+        accessToken: "proxy-token",
+      });
+      await expect(fetchCopilotUsage(authStorage)).rejects.toThrow(
+        "GitHub Copilot API request failed — all auth strategies exhausted",
       );
     });
   });
 
   describe("auth fallback", () => {
-    it("direct Bearer succeeds on first try — only 1 fetch call to COPILOT_USER_URL", async () => {
+    it("OAuth Bearer succeeds on first try — only 1 fetch call to COPILOT_USER_URL", async () => {
       const fetchSpy = vi.spyOn(globalThis, "fetch");
       fetchSpy.mockResolvedValue(
         mockFetchResponse(
@@ -223,7 +246,8 @@ describe("fetchCopilotUsage", () => {
         ),
       );
 
-      const result = await fetchCopilotUsage("test-key");
+      const authStorage = createMockAuthStorage({ oauthRefresh: "oauth-token" });
+      const result = await fetchCopilotUsage(authStorage);
 
       expect(result.percentage).toBe(50.0);
       // Only called once — the user URL, no token exchange needed
@@ -232,36 +256,30 @@ describe("fetchCopilotUsage", () => {
         COPILOT_USER_URL,
         expect.objectContaining({
           headers: expect.objectContaining({
-            Authorization: "Bearer test-key",
+            Authorization: "Bearer oauth-token",
           }),
         }),
       );
     });
 
-    it("direct Bearer fails, token exchange succeeds — retries user URL with exchanged token", async () => {
+    it("OAuth Bearer fails, OAuth token prefix succeeds — tries token prefix with same credential", async () => {
       const fetchSpy = vi.spyOn(globalThis, "fetch");
 
+      let userCallCount = 0;
       fetchSpy.mockImplementation((url: string | URL | Request) => {
         const urlStr =
           typeof url === "string" ? url : url instanceof URL ? url.toString() : url.url;
         if (urlStr.includes("/v2/token")) {
-          // Token exchange succeeds
           return Promise.resolve(
             mockFetchResponse({ token: "exchanged-token", expires_at: 0, refresh_in: 0 }),
           );
         }
-        // COPILOT_USER_URL: first call with original key fails, second with exchanged token succeeds
-        const callCount = fetchSpy.mock.calls.filter((c) => {
-          const calledUrl =
-            typeof c[0] === "string" ? c[0] : c[0] instanceof URL ? c[0].toString() : c[0].url;
-          return calledUrl === COPILOT_USER_URL;
-        }).length;
-
-        if (callCount <= 1) {
-          // First call to user URL — fail
+        userCallCount++;
+        if (userCallCount === 1) {
+          // First call: Bearer with OAuth refresh — fails
           return Promise.resolve(mockFetchResponse({}, false, 401));
         }
-        // Second call to user URL — succeed
+        // Second call: token prefix with OAuth refresh — succeeds
         return Promise.resolve(
           mockFetchResponse(
             createMockUserResponse({
@@ -272,24 +290,85 @@ describe("fetchCopilotUsage", () => {
         );
       });
 
-      // gh CLI should not be called, so mock it to error
+      const authStorage = createMockAuthStorage({ oauthRefresh: "oauth-refresh-token" });
+      const result = await fetchCopilotUsage(authStorage);
+
+      expect(result.percentage).toBe(40.0);
+      // 2 user URL calls (Bearer fail, token prefix succeed)
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+
+      // Verify both calls used the OAuth refresh token
+      const userCalls = fetchSpy.mock.calls.filter((c) => {
+        const calledUrl =
+          typeof c[0] === "string" ? c[0] : c[0] instanceof URL ? c[0].toString() : c[0].url;
+        return calledUrl === COPILOT_USER_URL;
+      });
+      expect(userCalls.length).toBe(2);
+      expect(userCalls[0]![1]).toEqual(
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            Authorization: "Bearer oauth-refresh-token",
+          }),
+        }),
+      );
+      expect(userCalls[1]![1]).toEqual(
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            Authorization: "token oauth-refresh-token",
+          }),
+        }),
+      );
+    });
+
+    it("OAuth fails, token exchange with proxy token succeeds — retries user URL with exchanged token", async () => {
+      const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+      let userCallCount = 0;
+      fetchSpy.mockImplementation((url: string | URL | Request) => {
+        const urlStr =
+          typeof url === "string" ? url : url instanceof URL ? url.toString() : url.url;
+        if (urlStr.includes("/v2/token")) {
+          // Token exchange succeeds
+          return Promise.resolve(
+            mockFetchResponse({ token: "exchanged-token", expires_at: 0, refresh_in: 0 }),
+          );
+        }
+        userCallCount++;
+        // All user URL calls before the exchanged token attempt fail
+        if (userCallCount <= 2) {
+          return Promise.resolve(mockFetchResponse({}, false, 401));
+        }
+        // Third user call (with exchanged token) succeeds
+        return Promise.resolve(
+          mockFetchResponse(
+            createMockUserResponse({
+              percent_remaining: 60,
+              quota_reset_date: "2025-08-01T00:00:00Z",
+            }),
+          ),
+        );
+      });
+
+      // gh CLI should not be called
       vi.mocked(execFile).mockImplementation((_cmd: any, _args: any, _opts: any, cb: any) => {
         cb(new Error("should not be called"));
         return {} as any;
       });
 
-      const result = await fetchCopilotUsage("test-key");
+      const authStorage = createMockAuthStorage({
+        oauthRefresh: "oauth-token",
+        accessToken: "proxy-token",
+      });
+      const result = await fetchCopilotUsage(authStorage);
 
       expect(result.percentage).toBe(40.0);
-      // Should have: 1st user call (fail), token exchange call, 2nd user call (success)
-      expect(fetchSpy).toHaveBeenCalledTimes(3);
 
-      // Verify the token exchange was called
+      // Verify the token exchange was called with proxy token
       expect(fetchSpy).toHaveBeenCalledWith(
         COPILOT_TOKEN_URL,
         expect.objectContaining({
           headers: expect.objectContaining({
-            Authorization: "Bearer test-key",
+            Authorization: "Bearer proxy-token",
           }),
         }),
       );
@@ -300,9 +379,9 @@ describe("fetchCopilotUsage", () => {
           typeof c[0] === "string" ? c[0] : c[0] instanceof URL ? c[0].toString() : c[0].url;
         return calledUrl === COPILOT_USER_URL;
       });
-      expect(userCalls.length).toBe(2);
-      // Second call should use exchanged token
-      expect(userCalls[1]![1]).toEqual(
+      expect(userCalls.length).toBe(3);
+      // Third call should use exchanged token with Bearer
+      expect(userCalls[2]![1]).toEqual(
         expect.objectContaining({
           headers: expect.objectContaining({
             Authorization: "Bearer exchanged-token",
@@ -311,9 +390,10 @@ describe("fetchCopilotUsage", () => {
       );
     });
 
-    it("both direct Bearer and token exchange fail, gh CLI succeeds", async () => {
+    it("OAuth and token exchange fail, proxy token direct with token prefix succeeds", async () => {
       const fetchSpy = vi.spyOn(globalThis, "fetch");
 
+      let userCallCount = 0;
       fetchSpy.mockImplementation((url: string | URL | Request) => {
         const urlStr =
           typeof url === "string" ? url : url instanceof URL ? url.toString() : url.url;
@@ -321,13 +401,48 @@ describe("fetchCopilotUsage", () => {
           // Token exchange fails
           return Promise.resolve(mockFetchResponse({}, false, 401));
         }
-        // COPILOT_USER_URL: 1st call (direct) fails, 2nd call (gh CLI) succeeds
-        const userCallCount = fetchSpy.mock.calls.filter((c) => {
-          const calledUrl =
-            typeof c[0] === "string" ? c[0] : c[0] instanceof URL ? c[0].toString() : c[0].url;
-          return calledUrl === COPILOT_USER_URL;
-        }).length;
+        userCallCount++;
+        // OAuth Bearer fails, OAuth token prefix fails, proxy direct succeeds
+        if (userCallCount <= 2) {
+          return Promise.resolve(mockFetchResponse({}, false, 401));
+        }
+        return Promise.resolve(
+          mockFetchResponse(
+            createMockUserResponse({
+              percent_remaining: 75,
+              quota_reset_date: "2025-09-01T00:00:00Z",
+            }),
+          ),
+        );
+      });
 
+      vi.mocked(execFile).mockImplementation((_cmd: any, _args: any, _opts: any, cb: any) => {
+        cb(new Error("should not be called"));
+        return {} as any;
+      });
+
+      const authStorage = createMockAuthStorage({
+        oauthRefresh: "oauth-token",
+        accessToken: "proxy-token",
+      });
+      const result = await fetchCopilotUsage(authStorage);
+
+      expect(result.percentage).toBe(25.0);
+      expect(result.resetTimeMs).toBe(new Date("2025-09-01T00:00:00Z").getTime());
+    });
+
+    it("all other auth fails, gh CLI succeeds with token prefix", async () => {
+      const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+      let userCallCount = 0;
+      fetchSpy.mockImplementation((url: string | URL | Request) => {
+        const urlStr =
+          typeof url === "string" ? url : url instanceof URL ? url.toString() : url.url;
+        if (urlStr.includes("/v2/token")) {
+          return Promise.resolve(mockFetchResponse({}, false, 401));
+        }
+        userCallCount++;
+        // All earlier calls fail, last call (gh CLI) succeeds
         if (userCallCount <= 1) {
           return Promise.resolve(mockFetchResponse({}, false, 401));
         }
@@ -347,7 +462,8 @@ describe("fetchCopilotUsage", () => {
         return {} as any;
       });
 
-      const result = await fetchCopilotUsage("test-key");
+      const authStorage = createMockAuthStorage({ accessToken: "proxy-token" });
+      const result = await fetchCopilotUsage(authStorage);
 
       expect(result.percentage).toBe(25.0);
       expect(result.resetTimeMs).toBe(new Date("2025-09-01T00:00:00Z").getTime());
@@ -373,13 +489,14 @@ describe("fetchCopilotUsage", () => {
         ),
       );
 
-      await fetchCopilotUsage("test-key");
+      const authStorage = createMockAuthStorage({ oauthRefresh: "oauth-token" });
+      await fetchCopilotUsage(authStorage);
 
       expect(fetchSpy).toHaveBeenCalledWith(
         COPILOT_USER_URL,
         expect.objectContaining({
           headers: expect.objectContaining({
-            Authorization: "Bearer test-key",
+            Authorization: "Bearer oauth-token",
             Accept: "application/json",
             "User-Agent": "GitHubCopilotChat/0.35.0",
             "Editor-Version": "vscode/1.107.0",
