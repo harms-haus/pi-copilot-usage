@@ -1,0 +1,11 @@
+PLAN.md
+RESEARCH*.md
+node_modules/
+dist/
+coverage/
+.bifrost.yaml
+*.md
+!README.md
+!CHANGELOG.md
+!CONTRIBUTING.md
+.DS_Store

@@ -1,0 +1,58 @@
+{
+  "name": "@harms-haus/pi-copilot-usage",
+  "version": "0.1.0",
+  "description": "GitHub Copilot quota monitor extension for pi-coding-agent",
+  "keywords": [
+    "pi-package"
+  ],
+  "files": [
+    "src/**/*.ts",
+    "!src/__tests__/**",
+    "LICENSE",
+    "README.md"
+  ],
+  "type": "module",
+  "main": "src/index.ts",
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "scripts": {
+    "lint": "eslint src/",
+    "lint:fix": "eslint --fix src/",
+    "format": "prettier --write src/",
+    "format:check": "prettier --check src/",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^22.0.0",
+    "@vitest/coverage-v8": "^4.1.6",
+    "eslint": "^10.4.0",
+    "eslint-config-prettier": "^10.1.8",
+    "prettier": "^3.8.3",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.59.3",
+    "@earendil-works/pi-coding-agent": "^0.74.0",
+    "vitest": "^4.1.6"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/harms-haus/pi-copilot-usage.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "author": "harms-haus",
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}
