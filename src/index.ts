@@ -72,5 +72,6 @@ export default function (pi: ExtensionAPI): void {
   });
   pi.on("session_shutdown", (_event, ctx) => {
     clearStatus(ctx);
+    lastProvider = undefined;
   });
 }

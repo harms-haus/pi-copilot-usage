@@ -94,6 +94,11 @@ describe("isCopilotProvider", () => {
 describe("fetchCopilotUsage", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    // Default execFile mock so getGhCliToken() resolves immediately (no gh token)
+    vi.mocked(execFile).mockImplementation((_cmd: any, _args: any, _opts: any, cb: any) => {
+      cb(new Error("gh CLI not available"));
+      return {} as any;
+    });
   });
 
   describe("happy path", () => {

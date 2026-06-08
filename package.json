@@ -26,7 +26,12 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "pre-commit-check": "npm run format:check && npm run lint && npm run typecheck",
+    "prepare": "simple-git-hooks"
+  },
+  "simple-git-hooks": {
+    "pre-commit": "npm run pre-commit-check"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -38,7 +43,8 @@
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.59.3",
     "@earendil-works/pi-coding-agent": "^0.74.0",
-    "vitest": "^4.1.6"
+    "vitest": "^4.1.6",
+    "simple-git-hooks": "^2.13.1"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*"

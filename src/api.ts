@@ -132,8 +132,14 @@ async function tryAuthHeader(authHeader: string): Promise<CopilotUsageData | und
 }
 
 export async function fetchCopilotUsage(authStorage: AuthStorage): Promise<CopilotUsageData> {
-  // Step 1: Try GitHub OAuth token from authStorage
-  const credential = authStorage.get("github-copilot");
+  // Prefetch all token sources in parallel
+  const [credential, accessToken, ghToken] = await Promise.all([
+    Promise.resolve(authStorage.get("github-copilot")),
+    authStorage.getApiKey("github-copilot").catch(() => undefined),
+    getGhCliToken(),
+  ]);
+
+  // Step 1: Try GitHub OAuth token
   if (credential && credential.type === "oauth") {
     const oauthCredential = credential as { type: "oauth"; refresh: string };
     if (oauthCredential.refresh) {
@@ -145,8 +151,7 @@ export async function fetchCopilotUsage(authStorage: AuthStorage): Promise<Copil
     }
   }
 
-  // Step 2: Try proxy token from authStorage with token exchange
-  const accessToken: string | undefined = await authStorage.getApiKey("github-copilot");
+  // Step 2: Try proxy token with exchange
   if (accessToken) {
     const exchangedToken: string | undefined = await exchangeToken(accessToken);
     if (exchangedToken) {
@@ -159,7 +164,6 @@ export async function fetchCopilotUsage(authStorage: AuthStorage): Promise<Copil
   }
 
   // Step 3: gh CLI fallback
-  const ghToken: string | undefined = await getGhCliToken();
   if (ghToken) {
     const ghResult = await tryAuthHeader(`token ${ghToken}`);
     if (ghResult) return ghResult;
